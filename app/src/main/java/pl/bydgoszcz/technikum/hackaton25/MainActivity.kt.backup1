@@ -1,0 +1,131 @@
+package pl.bydgoszcz.technikum.hackaton25
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import pl.bydgoszcz.technikum.hackaton25.ui.theme.Hackaton25Theme
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.PrivateKey
+import java.security.PublicKey
+import java.security.Signature
+import java.util.*
+import android.content.Context
+import android.util.Base64
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKeys
+import java.security.spec.X509EncodedKeySpec
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.KeyFactory
+
+class MainActivity : ComponentActivity() {
+    private lateinit var keyPair: KeyPair
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        keyPair = getOrCreateKeyPair(this)
+        setContent {
+            Hackaton25Theme {
+                MainScreen(keyPair)
+            }
+        }
+    }
+
+    private fun getOrCreateKeyPair(context: Context): KeyPair {
+        val sharedPreferences = EncryptedSharedPreferences.create(
+            "key_store",
+            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+            context,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+
+        val publicKeyString = sharedPreferences.getString("publicKey", null)
+        val privateKeyString = sharedPreferences.getString("privateKey", null)
+
+        return if (publicKeyString != null && privateKeyString != null) {
+            val publicKey = Base64.decode(publicKeyString, Base64.DEFAULT)
+            val privateKey = Base64.decode(privateKeyString, Base64.DEFAULT)
+            KeyPair(
+                KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(publicKey)),
+                KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(privateKey))
+            )
+        } else {
+            val keyPairGenerator = KeyPairGenerator.getInstance("RSA")
+            keyPairGenerator.initialize(2048)
+            val keyPair = keyPairGenerator.generateKeyPair()
+
+            with(sharedPreferences.edit()) {
+                putString("publicKey", Base64.encodeToString(keyPair.public.encoded, Base64.DEFAULT))
+                putString("privateKey", Base64.encodeToString(keyPair.private.encoded, Base64.DEFAULT))
+                apply()
+            }
+            keyPair
+        }
+    }
+}
+
+@Composable
+fun MainScreen(keyPair: KeyPair) {
+    var inputText by remember { mutableStateOf("") }
+    var outputText by remember { mutableStateOf("") }
+    val clipboardManager = LocalClipboardManager.current
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        TextField(
+            value = inputText,
+            onValueChange = { inputText = it },
+            label = { Text("Enter message") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Button(onClick = {
+                outputText = Base64.encodeToString(keyPair.public.encoded, Base64.DEFAULT)
+            }) {
+                Text("Export Public Key")
+            }
+            Button(onClick = {
+                val currentDateTime = Calendar.getInstance().time.toString()
+                val message = "$currentDateTime $inputText"
+                val signature = Signature.getInstance("SHA256withRSA").apply {
+                    initSign(keyPair.private)
+                    update(message.toByteArray())
+                }.sign()
+                outputText = Base64.encodeToString(signature, Base64.DEFAULT)
+            }) {
+                Text("Generate Signed Message")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        TextField(
+            value = outputText,
+            onValueChange = {},
+            label = { Text("Output") },
+            modifier = Modifier.fillMaxWidth(),
+            readOnly = true
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = {
+            clipboardManager.setText(AnnotatedString(outputText))
+        }) {
+            Text("Copy to Clipboard")
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun MainScreenPreview() {
+    Hackaton25Theme {
+        MainScreen(KeyPairGenerator.getInstance("RSA").generateKeyPair())
+    }
+}
